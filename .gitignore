@@ -8,3 +8,4 @@ __pycache__/
 *.log
 secrets.py
 my_secrets.py
+*.db
