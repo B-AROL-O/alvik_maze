@@ -123,6 +123,70 @@ async def mqtt_keepalive():
             print("MQTT keepalive error: {}".format(e))
             await asyncio.sleep(1)
 
+async def continuous_tof_publisher():
+    """Background task to continuously publish ToF sensor data"""
+    global mqtt_client, robot_theta, scanning
+
+    print("Starting continuous ToF publisher...")
+
+    # Parameters for multi-zone ToF sensor (VL53L5CX)
+    FOV_HORIZONTAL = 45.0
+    FOV_PER_COLUMN = FOV_HORIZONTAL / 8.0  # 5.625° per column
+
+    while True:
+        try:
+            # Skip publishing if we're doing a full 360° scan
+            if scanning:
+                await asyncio.sleep(0.5)
+                continue
+
+            # Get current robot angle in degrees
+            current_angle = math.degrees(robot_theta) % 360
+
+            # Read ToF sensor
+            dist = alvik.get_distance()
+
+            if isinstance(dist, tuple) and len(dist) == 64:
+                # Multi-zone data: 8x8 grid
+                # Publish all 64 zones with angle offsets
+                for zone_idx, zone_dist in enumerate(dist):
+                    if zone_dist > 0:  # Valid reading
+                        row = zone_idx // 8  # 0-7 (top to bottom)
+                        col = zone_idx % 8   # 0-7 (left to right)
+
+                        # Calculate horizontal angle offset for this zone
+                        col_angle_offset = (col - 3.5) * FOV_PER_COLUMN
+
+                        # Total angle = robot angle + zone offset
+                        zone_angle = (current_angle + col_angle_offset) % 360
+
+                        # Publish individual zone reading
+                        message = "{:.2f},{}".format(zone_angle, zone_dist)
+                        mqtt_client.publish(b"alvik/scan", message.encode())
+
+            elif isinstance(dist, tuple):
+                # Multiple zones but not 64 - average them
+                valid_dists = [d for d in dist if d > 0]
+                if valid_dists:
+                    avg_distance = sum(valid_dists) / len(valid_dists)
+                    message = "{},{}".format(current_angle, avg_distance)
+                    mqtt_client.publish(b"alvik/scan", message.encode())
+            else:
+                # Single distance reading
+                if dist > 0:
+                    message = "{},{}".format(current_angle, dist)
+                    mqtt_client.publish(b"alvik/scan", message.encode())
+
+            # Signal scan complete to trigger ROS2 publish
+            mqtt_client.publish(b"alvik/scan_complete", b"1")
+
+            # Publish at ~5 Hz (reasonable rate for continuous scanning)
+            await asyncio.sleep(0.2)
+
+        except Exception as e:
+            print("ToF publisher error: {}".format(e))
+            await asyncio.sleep(1)
+
 async def perform_scan():
     """Perform 360° scan with encoder-controlled rotation"""
     global mqtt_client, scanning
@@ -252,6 +316,14 @@ async def perform_scan():
                 if i % 60 == 0:
                     print("Publish error at {}°: {}".format(angle, e))
 
+            # Update odometry during scan (robot is rotating in place)
+            # Rotation in place only changes theta, not x/y position
+            robot_theta = math.radians(angle)
+
+            # Publish odometry every 10 readings (every ~10 degrees)
+            if i % 10 == 0:
+                publish_odometry()
+
             # Print progress every 60 degrees
             if i % 60 == 0:
                 try:
@@ -271,7 +343,7 @@ async def perform_scan():
 
         # Correction: rotate back if we overshot 360°
         overshoot = final_angle - 360.0
-        if abs(overshoot) > 2.0:  # Only correct if overshoot > 2°
+        if abs(overshoot) > 0.5:  # Only correct if overshoot > 0.5°
             print("Correcting overshoot: {:.1f}°".format(overshoot))
             await asyncio.sleep(0.2)  # Let motors settle
 
@@ -384,6 +456,19 @@ def publish_status(status):
     global mqtt_client
     mqtt_client.publish(b"alvik/status", status.encode())
 
+async def continuous_odom_publisher():
+    """Background task to continuously publish odometry"""
+    global mqtt_client
+
+    while True:
+        try:
+            publish_odometry()
+            # Publish odometry at 10 Hz
+            await asyncio.sleep(0.1)
+        except Exception as e:
+            print("Odometry publisher error: {}".format(e))
+            await asyncio.sleep(1)
+
 async def main_loop():
     """Main program loop using asyncio"""
     global mqtt_client
@@ -407,8 +492,12 @@ async def main_loop():
     # Publish initial odometry
     publish_odometry()
 
-    # Start MQTT keepalive task in background
+    # Start background tasks
     asyncio.create_task(mqtt_keepalive())
+    asyncio.create_task(continuous_tof_publisher())
+    asyncio.create_task(continuous_odom_publisher())
+
+    print("Background tasks started: MQTT keepalive, ToF publisher, Odometry publisher")
 
     # Main loop - just keep the event loop alive
     try:

@@ -1,0 +1,12 @@
+source;share/alvik_navigation/hook/path.ps1
+source;share/alvik_navigation/hook/path.dsv
+source;share/alvik_navigation/hook/path.sh
+source;share/alvik_navigation/hook/pythonpath.ps1
+source;share/alvik_navigation/hook/pythonpath.dsv
+source;share/alvik_navigation/hook/pythonpath.sh
+source;share/alvik_navigation/hook/pythonscriptspath.ps1
+source;share/alvik_navigation/hook/pythonscriptspath.dsv
+source;share/alvik_navigation/hook/pythonscriptspath.sh
+source;share/alvik_navigation/hook/ament_prefix_path.ps1
+source;share/alvik_navigation/hook/ament_prefix_path.dsv
+source;share/alvik_navigation/hook/ament_prefix_path.sh

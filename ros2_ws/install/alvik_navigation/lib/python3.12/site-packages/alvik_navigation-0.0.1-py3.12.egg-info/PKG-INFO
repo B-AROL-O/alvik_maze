@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: alvik-navigation
+Version: 0.0.1
+Summary: Alvik robot navigation and SLAM package
+Maintainer: kev
+Maintainer-email: kev@example.com
+License: MIT

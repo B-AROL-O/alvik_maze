@@ -11,6 +11,9 @@ RUN apt-get update && apt-get install -y \
     ros-jazzy-tf2-geometry-msgs \
     ros-jazzy-rmw-cyclonedds-cpp \
     ros-jazzy-foxglove-bridge \
+    ros-jazzy-slam-toolbox \
+    ros-jazzy-navigation2 \
+    ros-jazzy-nav2-bringup \
     mosquitto \
     mosquitto-clients \
     vim \

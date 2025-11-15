@@ -29,18 +29,21 @@ services:
     volumes:
       # Mount workspace
       - ./ros2_ws:/ros2_ws
+      # Mount scripts
+      - ./scripts:/scripts
       # Mount X11 socket for GUI
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       # Share network configuration
       - /etc/hosts:/etc/hosts:ro
-    
+
     devices:
       - /dev/dri:/dev/dri  # GPU access if available
-    
+
     stdin_open: true
     tty: true
-    
-    command: bash
+    restart: unless-stopped
+
+    command: /scripts/start_slam.sh
 
   # MQTT Broker for Alvik communication
   mosquitto:

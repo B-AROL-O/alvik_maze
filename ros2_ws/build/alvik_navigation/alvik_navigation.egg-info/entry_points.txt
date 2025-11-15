@@ -1,0 +1,4 @@
+[console_scripts]
+click_to_move = alvik_navigation.click_to_move:main
+odom_publisher = alvik_navigation.odom_publisher:main
+tof_receiver = alvik_navigation.tof_receiver:main
