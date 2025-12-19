@@ -79,62 +79,66 @@ class AlvikToFReceiver(Node):
         self.get_logger().warn(f'MQTT disconnected with code {rc}')
     
     def on_mqtt_message(self, client, userdata, msg):
-        """Receive individual ToF reading from Alvik"""
+        """Receive ToF/Lidar readings from robot"""
         try:
             topic = msg.topic
-            
+
             if topic == 'alvik/scan':
-                # Parse "angle,distance" or "angle,(dist1,dist2,...)" message
                 data = msg.payload.decode().strip()
 
-                # Split only on first comma to separate angle from distance(s)
-                if ',' not in data:
-                    return
-
-                angle_str, distance_part = data.split(',', 1)
-                angle = float(angle_str)
-
-                # Handle multiple distances: "(7.4, 9.4, 10.2)" or single "500"
-                distance_part = distance_part.strip()
-                if distance_part.startswith('(') and distance_part.endswith(')'):
-                    # Multiple distances - take the average
-                    distance_str = distance_part[1:-1]  # Remove parentheses
-                    distances = [float(d.strip()) for d in distance_str.split(',')]
-                    distance = sum(distances) / len(distances) / 100.0  # Average in meters (cm to m)
+                # Handle batched format: "angle1,dist1;angle2,dist2;..."
+                if ';' in data:
+                    for point in data.split(';'):
+                        if ',' not in point:
+                            continue
+                        angle_str, dist_str = point.split(',', 1)
+                        try:
+                            angle = float(angle_str)
+                            distance = float(dist_str) / 100.0  # cm to meters
+                            self.current_scan[angle] = distance
+                        except ValueError:
+                            continue
                 else:
-                    # Single distance
-                    distance = float(distance_part) / 100.0  # cm to meters
+                    # Single point format: "angle,distance" or "angle,(dist1,dist2,...)"
+                    if ',' not in data:
+                        return
 
-                # Store in current scan
-                self.current_scan[angle] = distance
-                
+                    angle_str, distance_part = data.split(',', 1)
+                    angle = float(angle_str)
+
+                    # Handle multiple distances: "(7.4, 9.4, 10.2)" or single "500"
+                    distance_part = distance_part.strip()
+                    if distance_part.startswith('(') and distance_part.endswith(')'):
+                        # Multiple distances - take the average
+                        distance_str = distance_part[1:-1]  # Remove parentheses
+                        distances = [float(d.strip()) for d in distance_str.split(',')]
+                        distance = sum(distances) / len(distances) / 100.0  # Average in meters (cm to m)
+                    else:
+                        # Single distance
+                        distance = float(distance_part) / 100.0  # cm to meters
+
+                    # Store in current scan
+                    self.current_scan[angle] = distance
+
             elif topic == 'alvik/scan_complete':
-                # Full 360° scan received - publish and clear for next scan
-                if len(self.current_scan) > 0:
+                # Full 360° scan received - only publish if we have enough data
+                # This prevents partial scans from being published due to timing
+                if len(self.current_scan) > 50:
                     self.publish_scan()
-                self.current_scan = {}  # Reset for next 360° scan
+                    self.current_scan = {}  # Reset for next 360° scan
+                # If not enough data, keep accumulating (don't clear)
 
         except Exception as e:
             self.get_logger().error(f'Parse error: {e}')
 
     def publish_scan_timer_callback(self):
-        """Publish scan data periodically for continuous SLAM"""
-        if len(self.current_scan) > 5:  # Only publish if we have some data
-            # Check angular span to detect 360° scan in progress
-            angles = list(self.current_scan.keys())
-            angle_span = max(angles) - min(angles)
-
-            # If span > 180°, this is a 360° scan - wait for scan_complete
-            # This prevents concentric circles during rotation
-            if angle_span > 180:
-                return
-
-            self.publish_scan()
-            # Don't clear - let scan data accumulate for forward-facing FOV
-            # Will be cleared on next scan_complete (360° scan)
+        """Publish scan data periodically for continuous SLAM (ToF only)"""
+        # Skip entirely - only publish on scan_complete for clean lidar scans
+        # This prevents noisy partial scans from interfering
+        return
     
     def publish_scan(self):
-        """Convert ToF readings to ROS2 LaserScan message"""
+        """Convert ToF/Lidar readings to ROS2 LaserScan message"""
         if not self.current_scan:
             return
 
@@ -142,50 +146,85 @@ class AlvikToFReceiver(Node):
         scan.header.stamp = self.get_clock().now().to_msg()
         scan.header.frame_id = 'alvik_laser'
 
-        # Normalize angles to -180° to +180° range to handle wrapping
-        # This prevents 350°, 355°, 0°, 5°, 10° from appearing as 0° to 355° (360° span)
-        normalized_scan = {}
-        for angle, distance in self.current_scan.items():
-            normalized_angle = angle
-            if normalized_angle > 180:
-                normalized_angle -= 360
-            normalized_scan[normalized_angle] = distance
-
-        # Get sorted angles
-        angles = sorted(normalized_scan.keys())
-
+        # Check if this is a full 360° scan (lidar) or partial scan (ToF)
+        angles = list(self.current_scan.keys())
         if len(angles) < 2:
             return
 
-        # Set angle_min/max based on actual data range
-        # This allows both 45° scans (normal) and 360° scans (during rotation)
-        scan.angle_min = math.radians(angles[0])
-        scan.angle_max = math.radians(angles[-1])
+        # Normalize angles to 0-360 range for analysis
+        normalized_angles = [(a % 360) for a in angles]
+        angle_span = max(normalized_angles) - min(normalized_angles)
 
-        # Calculate angle increment (average)
-        angle_diffs = [angles[i+1] - angles[i] for i in range(len(angles)-1)]
-        avg_increment = sum(angle_diffs) / len(angle_diffs) if angle_diffs else 5.0
-        scan.angle_increment = math.radians(avg_increment)
+        # Detect 360° lidar: points spread across most of circle
+        # LD06 may have gaps from filtered readings, so lower threshold
+        is_full_360 = len(angles) > 50 and angle_span > 270
+
+        if is_full_360:
+            # Full 360° lidar scan - create fixed-size scan
+            scan.angle_min = 0.0
+            scan.angle_max = 2 * math.pi - math.radians(1)  # 0 to 359°
+            scan.angle_increment = math.radians(1)  # 1° resolution
+
+            scan.range_min = 0.02   # 2cm minimum
+            scan.range_max = 5.0    # 5m maximum - filter outliers
+
+            # Build 360-element ranges array
+            # LD06 with cable facing back and triangle forward:
+            # - LD06 0° is at cable (= robot's back)
+            # - Need 180° rotation + left-right flip
+            scan.ranges = []
+            for deg in range(360):
+                # Combined transform: rotate 180° and flip
+                ld06_angle = (180 - deg) % 360
+
+                # Find closest angle in our data
+                distance = None
+                for angle, dist in self.current_scan.items():
+                    angle_normalized = angle % 360
+                    diff = abs(angle_normalized - ld06_angle)
+                    if diff < 1.5 or diff > 358.5:  # Handle wrap-around
+                        distance = dist
+                        break
+
+                if distance is not None and scan.range_min <= distance <= scan.range_max:
+                    scan.ranges.append(float(distance))
+                else:
+                    scan.ranges.append(float('inf'))
+        else:
+            # Partial scan (ToF sensor) - use original logic
+            normalized_scan = {}
+            for angle, distance in self.current_scan.items():
+                normalized_angle = angle
+                if normalized_angle > 180:
+                    normalized_angle -= 360
+                normalized_scan[normalized_angle] = distance
+
+            sorted_angles = sorted(normalized_scan.keys())
+
+            scan.angle_min = math.radians(sorted_angles[0])
+            scan.angle_max = math.radians(sorted_angles[-1])
+
+            angle_diffs = [sorted_angles[i+1] - sorted_angles[i] for i in range(len(sorted_angles)-1)]
+            avg_increment = sum(angle_diffs) / len(angle_diffs) if angle_diffs else 5.0
+            scan.angle_increment = math.radians(avg_increment)
+
+            scan.range_min = 0.02
+            scan.range_max = 2.0
+
+            scan.ranges = []
+            for angle in sorted_angles:
+                distance = normalized_scan[angle]
+                if distance < scan.range_min or distance > scan.range_max:
+                    scan.ranges.append(float('inf'))
+                else:
+                    scan.ranges.append(float(distance))
 
         scan.time_increment = 0.0
         scan.scan_time = 0.0
-        scan.range_min = 0.02  # 2cm minimum
-        scan.range_max = 2.0   # 2m maximum for ToF
-
-        # Build ranges array in order
-        scan.ranges = []
-        for angle in angles:
-            distance = normalized_scan[angle]
-            # Filter invalid readings
-            if distance < scan.range_min or distance > scan.range_max:
-                scan.ranges.append(float('inf'))  # Invalid reading
-            else:
-                scan.ranges.append(distance)
 
         self.scan_pub.publish(scan)
         self.get_logger().info(
-            f'Published scan: {len(scan.ranges)} points, '
-            f'FOV: {math.degrees(scan.angle_min):.1f}° to {math.degrees(scan.angle_max):.1f}°'
+            f'Published {"360° lidar" if is_full_360 else "ToF"} scan: {len(scan.ranges)} points'
         )
         self.last_scan_time = self.get_clock().now()
     

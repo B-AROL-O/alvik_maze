@@ -28,8 +28,8 @@ slam_toolbox:
     throttle_scans: 1
     transform_publish_period: 0.02  # 50Hz for smooth TF
     map_update_interval: 2.0        # Update map every 2 seconds
-    resolution: 0.01                # 1cm resolution for 20cm scale maze
-    max_laser_range: 2.0            # 2m maximum range for ToF
+    resolution: 0.05                # 5cm resolution for room-scale mapping
+    max_laser_range: 5.0            # 5m maximum - filter outliers
     minimum_time_interval: 0.1      # Min time between scans
     transform_timeout: 0.2
     tf_buffer_duration: 30.0
@@ -41,25 +41,25 @@ slam_toolbox:
     minimum_travel_distance: 0.02   # 2cm minimum travel for small robot
     minimum_travel_heading: 0.05    # ~3 degrees minimum rotation
     scan_buffer_size: 10
-    scan_buffer_maximum_scan_distance: 5.0
+    scan_buffer_maximum_scan_distance: 15.0
     link_match_minimum_response_fine: 0.1
-    link_scan_maximum_distance: 1.0
-    loop_search_maximum_distance: 2.0      # Small environment
+    link_scan_maximum_distance: 3.0
+    loop_search_maximum_distance: 10.0     # Room-scale environment
     do_loop_closing: true
     loop_match_minimum_chain_size: 10
     loop_match_maximum_variance_coarse: 3.0
     loop_match_minimum_response_coarse: 0.35
     loop_match_minimum_response_fine: 0.45
 
-    # Correlation Parameters - Tuned for small scale
+    # Correlation Parameters - Tuned for room scale
     correlation_search_space_dimension: 0.5
-    correlation_search_space_resolution: 0.005  # 5mm search resolution
-    correlation_search_space_smear_deviation: 0.02
+    correlation_search_space_resolution: 0.01   # 1cm search resolution
+    correlation_search_space_smear_deviation: 0.03
 
     # Correlation Parameters - Loop Closure
-    loop_search_space_dimension: 4.0
-    loop_search_space_resolution: 0.01
-    loop_search_space_smear_deviation: 0.03
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.05
 
     # Scan Matcher Parameters
     distance_variance_penalty: 0.5
